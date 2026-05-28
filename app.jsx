@@ -1156,6 +1156,148 @@ function NewCampaignDrawer({ onClose, onCreate, templates }) {
   );
 }
 
+// ─── Campaign Map Card ────────────────────────────────────────
+function CampaignMapCard({ campaign, stages, onSelect, onDelete }) {
+  const stats = campaignStats(stages);
+  const sorted = [...stages].sort((a, b) => a.order_index - b.order_index);
+  const withDur = sorted.map(s => ({ ...s, dur: stageDuration(s) }));
+  const totalDur = withDur.reduce((sum, s) => sum + s.dur, 0);
+  const hasTime = totalDur > 0;
+  const effectiveTotal = hasTime ? totalDur : withDur.length;
+  const effectiveDur = (s) => hasTime ? s.dur : 1;
+
+  const waitStages = withDur.filter(s => s.status === 'wait');
+  const bottleneck = waitStages.length > 0
+    ? waitStages.reduce((a, b) => effectiveDur(a) > effectiveDur(b) ? a : b)
+    : null;
+
+  const inProgress = stages.some(s => s.started_at && !s.ended_at && !s.touch_time_min);
+  const statusCls = campaign.status === 'active' ? (inProgress ? 'warn' : 'ok') : 'muted';
+
+  return (
+    <div className="card" style={{ marginBottom: 16, cursor:'default' }}>
+      {/* Card header */}
+      <div className="card-hd" style={{ padding:'14px 18px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, flex:1, minWidth:0 }}>
+          <div style={{
+            width:32, height:32, borderRadius:8, flexShrink:0,
+            background: colorOf(campaign.name),
+            display:'grid', placeItems:'center',
+            color:'white', fontWeight:700, fontSize:12,
+          }}>{initialsOf(campaign.name)}</div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontWeight:600, fontSize:14, letterSpacing:'-0.01em', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {campaign.name}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
+              <span className={`cs-status ${statusCls}`} style={{ fontSize:11 }}>
+                <span className="dot" />
+                {inProgress ? 'In progress' : campaign.status}
+              </span>
+              {campaign.owner && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{campaign.owner}</span>}
+              <span style={{ fontSize:11, color:'var(--text-muted)' }}>{stages.length} stages</span>
+            </div>
+          </div>
+        </div>
+        <div className="card-hd-spacer" />
+        {/* Stat pills */}
+        {hasTime && (
+          <div style={{ display:'flex', gap:16, alignItems:'center', marginRight:12 }}>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Total</div>
+              <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600 }}>{fmtDur(stats.total)}</div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Wait</div>
+              <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color: stats.wait > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(stats.wait)}</div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Efficiency</div>
+              <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color:`var(--${effClass(stats.efficiency)})` }}>{stats.efficiency}%</div>
+            </div>
+          </div>
+        )}
+        <button className="btn ghost" style={{ padding:'4px 8px', fontSize:12 }} onClick={() => onSelect(campaign)}>
+          Edit / Details →
+        </button>
+        <button className="btn ghost" style={{ padding:'4px', color:'var(--text-muted)' }}
+          onClick={() => { if (confirm(`Delete "${campaign.name}"?`)) onDelete(campaign.id); }}>
+          <Icon d={ICONS.trash} size={13} />
+        </button>
+      </div>
+
+      {/* The map itself */}
+      <div style={{ padding:'12px 18px 16px' }}>
+        {stages.length === 0 ? (
+          <div style={{ textAlign:'center', padding:'20px 0', color:'var(--text-muted)', fontSize:13 }}>
+            No stages — <span className="cust-link" onClick={() => onSelect(campaign)}>add stages in detail view</span>
+          </div>
+        ) : (
+          <>
+            {/* Horizontal timeline */}
+            <div style={{ display:'flex', gap:3, height:56, marginBottom:8 }}>
+              {withDur.map(stage => {
+                const pct = (effectiveDur(stage) / effectiveTotal) * 100;
+                const isBottleneck = bottleneck && stage.id === bottleneck.id;
+                const isInProg = stage.started_at && !stage.ended_at && !stage.touch_time_min;
+                const blockCls = isInProg ? 'in-progress' : stage.status;
+                return (
+                  <div key={stage.id}
+                    className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
+                    style={{ width:`${Math.max(pct, 2)}%`, borderRadius:4 }}
+                    title={`${stage.name}${hasTime ? ' · ' + fmtDur(stage.dur) : ''}${isBottleneck ? ' ⚠ Bottleneck' : ''}`}
+                  >
+                    {isInProg && <div className="vsm-pulse" />}
+                    {isBottleneck && <div className="vsm-bottleneck-tag">Bottleneck</div>}
+                    <div className="vsm-block-name" style={{ fontSize:10 }}>{stage.name}</div>
+                    {hasTime && stage.dur > 0 && (
+                      <div className="vsm-block-dur" style={{ fontSize:9 }}>{fmtDur(stage.dur)}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Stage labels row */}
+            <div style={{ display:'flex', gap:3 }}>
+              {withDur.map(stage => {
+                const pct = (effectiveDur(stage) / effectiveTotal) * 100;
+                return (
+                  <div key={stage.id} style={{
+                    width:`${Math.max(pct, 2)}%`,
+                    fontSize:9, color:'var(--text-muted)',
+                    textAlign:'center', overflow:'hidden',
+                    whiteSpace:'nowrap', textOverflow:'ellipsis',
+                  }}>
+                    {stage.status === 'wait' ? '⏸' : '▶'}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Legend + bottleneck note */}
+            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:10 }}>
+              <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot active" />Work</div>
+              <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot wait" />Wait</div>
+              <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot in-progress" />In progress</div>
+              {bottleneck && (
+                <span style={{ marginLeft:'auto', fontSize:11, color:'var(--bad)', fontWeight:500 }}>
+                  ⚠ Bottleneck: {bottleneck.name}{hasTime ? ` (${fmtDur(effectiveDur(bottleneck))})` : ''}
+                </span>
+              )}
+              {!hasTime && (
+                <span style={{ marginLeft:'auto', fontSize:10, color:'var(--text-muted)', fontStyle:'italic' }}>
+                  Equal-width — no timestamp data
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Campaigns Page ───────────────────────────────────────────
 function CampaignsPage({ onSelectCampaign }) {
   const [campaigns, setCampaigns] = useState([]);
@@ -1163,6 +1305,8 @@ function CampaignsPage({ onSelectCampaign }) {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showDrawer, setShowDrawer] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -1170,8 +1314,6 @@ function CampaignsPage({ onSelectCampaign }) {
       const [camps, tmpls] = await Promise.all([db.getCampaigns(), db.getTemplates()]);
       setCampaigns(camps);
       setTemplates(tmpls);
-
-      // Load stages for all campaigns
       const stageResults = await Promise.all(camps.map(c => db.getStages(c.id)));
       const map = {};
       camps.forEach((c, i) => { map[c.id] = stageResults[i]; });
@@ -1196,33 +1338,67 @@ function CampaignsPage({ onSelectCampaign }) {
     } catch(e) { alert(e.message); }
   };
 
+  const filtered = campaigns.filter(c => {
+    if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
   return (
     <>
       <div className="topbar">
         <div>
-          <h1>Campaigns</h1>
-          <div className="crumb">Value stream maps for all active work</div>
+          <h1>Flow Maps</h1>
+          <div className="crumb">Campaign value stream — work vs. wait at a glance</div>
         </div>
         <div className="topbar-spacer" />
+        <div className="search" style={{ width:180 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+          <input placeholder="Filter campaigns…" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <div className="daterange">
+          {['all','active','complete','archived'].map(s => (
+            <button key={s} className={statusFilter === s ? 'on' : ''}
+              onClick={() => setStatusFilter(s)}>
+              {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
         <button className="btn primary" onClick={() => setShowDrawer(true)}>
-          <Icon d={ICONS.plus} size={13} /> New Campaign
+          <Icon d={ICONS.plus} size={13} /> New
         </button>
       </div>
+
       <div className="content">
         {loading ? (
           <div style={{ padding:60, textAlign:'center', color:'var(--text-muted)' }}>Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            <div className="lg">{campaigns.length === 0 ? 'No campaigns yet' : 'No matches'}</div>
+            <div style={{ marginTop:4 }}>
+              {campaigns.length === 0
+                ? 'Sync from ClickUp (tweaks panel) or create one manually.'
+                : 'Try a different filter.'}
+            </div>
+          </div>
         ) : (
           <>
-            <KpiStrip campaigns={campaigns} stagesMap={stagesMap} />
-            <CampaignTable
-              campaigns={campaigns}
-              stagesMap={stagesMap}
-              onSelect={c => onSelectCampaign(c)}
-              onDelete={handleDelete}
-            />
+            <KpiStrip campaigns={filtered} stagesMap={stagesMap} />
+            {filtered.map(c => (
+              <CampaignMapCard
+                key={c.id}
+                campaign={c}
+                stages={stagesMap[c.id] || []}
+                onSelect={onSelectCampaign}
+                onDelete={handleDelete}
+              />
+            ))}
           </>
         )}
       </div>
+
       {showDrawer && (
         <NewCampaignDrawer
           templates={templates}
