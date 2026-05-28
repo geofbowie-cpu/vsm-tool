@@ -1,0 +1,351 @@
+/* vsm.css — VSM-specific styles layered on top of design-system.css */
+
+/* ── Timeline ─────────────────────────────────────────────── */
+.vsm-timeline-wrap {
+  padding: 20px 16px 16px;
+}
+
+.vsm-timeline {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  height: 72px;
+  border-radius: var(--r-2);
+  overflow: hidden;
+  position: relative;
+}
+
+.vsm-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  cursor: default;
+  transition: filter 100ms;
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+.vsm-block:hover { filter: brightness(1.12); }
+
+.vsm-block.active     { background: var(--good); }
+.vsm-block.wait       { background: var(--bad); }
+.vsm-block.in-progress { background: var(--warn); }
+
+.vsm-block-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.95);
+  text-align: center;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+  letter-spacing: 0.01em;
+}
+
+.vsm-block-dur {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: rgba(255,255,255,0.7);
+  margin-top: 2px;
+}
+
+/* Bottleneck indicator — sits above the timeline block */
+.vsm-block.bottleneck {
+  outline: 2px solid rgba(255,255,255,0.35);
+  outline-offset: -2px;
+}
+
+.vsm-bottleneck-tag {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.9);
+  background: rgba(0,0,0,0.25);
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* Pulse dot for in-progress stages */
+.vsm-pulse {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  box-shadow: 0 0 0 0 rgba(255,255,255,0.4);
+  animation: vsm-pulse 1.8s ease-out infinite;
+}
+
+@keyframes vsm-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0.4); }
+  100% { box-shadow: 0 0 0 10px rgba(255,255,255,0); }
+}
+
+/* Timeline legend */
+.vsm-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-soft);
+}
+
+.vsm-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.vsm-legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.vsm-legend-dot.active      { background: var(--good); }
+.vsm-legend-dot.wait        { background: var(--bad); }
+.vsm-legend-dot.in-progress { background: var(--warn); }
+
+/* Stat bar below timeline */
+.vsm-stat-bar {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.vsm-stat {
+  flex: 1;
+  padding: 10px 14px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vsm-stat:last-child { border-right: 0; }
+
+.vsm-stat-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.vsm-stat-value {
+  font-family: var(--f-mono);
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Efficiency bar ───────────────────────────────────────── */
+.eff-bar-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+.eff-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.eff-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 300ms ease;
+}
+.eff-bar-fill.good   { background: var(--good); }
+.eff-bar-fill.warn   { background: var(--warn); }
+.eff-bar-fill.bad    { background: var(--bad); }
+.eff-pct {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+}
+.eff-pct.good { color: var(--good); }
+.eff-pct.warn { color: var(--warn); }
+.eff-pct.bad  { color: var(--bad); }
+
+/* ── Stage type toggle pill ───────────────────────────────── */
+.stage-type-toggle {
+  display: inline-flex;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 2px;
+  gap: 2px;
+}
+.stage-type-btn {
+  appearance: none; border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-soft);
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  cursor: default;
+  white-space: nowrap;
+}
+.stage-type-btn:hover { color: var(--text); }
+.stage-type-btn.on-active {
+  background: var(--good);
+  color: white;
+}
+.stage-type-btn.on-wait {
+  background: var(--bad);
+  color: white;
+}
+
+/* ── Inline editable cell ─────────────────────────────────── */
+.editable-cell {
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 100ms;
+}
+.editable-cell:hover {
+  border-bottom-color: var(--text-muted);
+}
+
+/* ── New campaign drawer ──────────────────────────────────── */
+.vsm-drawer-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+.vsm-drawer {
+  width: 400px;
+  height: 100%;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 180ms ease-out;
+}
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.vsm-drawer-hd {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.vsm-drawer-hd h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.vsm-drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.vsm-drawer-foot {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.field input, .field textarea, .field select {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: var(--r-2);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+}
+.field input:focus, .field textarea:focus, .field select:focus {
+  border-color: var(--accent);
+}
+.field select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' stroke='%23888' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 26px;
+  cursor: default;
+}
+
+/* ── Template stamp card ──────────────────────────────────── */
+.tmpl-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  overflow: hidden;
+  cursor: default;
+  transition: border-color 120ms;
+  background: var(--bg-elev);
+}
+.tmpl-card:hover { border-color: var(--line-strong); }
+.tmpl-card-hd {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tmpl-card-name { font-weight: 600; font-size: 13.5px; }
+.tmpl-stages-preview {
+  display: flex;
+  gap: 3px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+.tmpl-stage-chip {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  color: white;
+}
+.tmpl-stage-chip.active { background: var(--good); }
+.tmpl-stage-chip.wait   { background: var(--bad); }
+
+/* ── Empty state in table ─────────────────────────────────── */
+.vsm-empty-row td {
+  padding: 40px 20px !important;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
