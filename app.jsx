@@ -113,6 +113,123 @@ const db = {
   },
 };
 
+// ─── ClickUp sync ────────────────────────────────────────────
+const CU_LIST_ID = '901113342672'; // Marketing Team › Campaigns › Campaign Tasks
+
+const getCuKey = () => {
+  try { return JSON.parse(localStorage.getItem('vsm-cu') || '{}').key || ''; }
+  catch { return ''; }
+};
+const saveCuKey = (key) => localStorage.setItem('vsm-cu', JSON.stringify({ key }));
+
+const cuHeaders = (key) => ({ Authorization: key, 'Content-Type': 'application/json' });
+
+const msToIso = (ms) => ms ? new Date(parseInt(ms)).toISOString() : null;
+
+const mapCampaignStatus = (s) =>
+  s === 'complete' || s === 'closed' ? 'complete' :
+  s === 'cancelled' ? 'archived' : 'active';
+
+const mapStageStatus = (s) =>
+  s === 'on hold' || s === 'to do' ? 'wait' : 'active';
+
+async function fetchCuPage(key, page) {
+  const res = await fetch(
+    `https://api.clickup.com/api/v2/list/${CU_LIST_ID}/task?subtasks=true&include_closed=true&page=${page}`,
+    { headers: cuHeaders(key) }
+  );
+  if (!res.ok) throw new Error(`ClickUp API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function syncClickUp(key, onProgress) {
+  // 1. Fetch all tasks (paginate)
+  onProgress('Fetching tasks from ClickUp…');
+  const allTasks = [];
+  let page = 0;
+  while (true) {
+    const data = await fetchCuPage(key, page);
+    if (!data.tasks?.length) break;
+    allTasks.push(...data.tasks);
+    if (data.last_page !== false || data.tasks.length < 100) break;
+    page++;
+  }
+
+  // 2. Build parent→children map
+  const byId = Object.fromEntries(allTasks.map(t => [t.id, t]));
+  const childrenOf = {};
+  for (const t of allTasks) {
+    if (t.parent) {
+      childrenOf[t.parent] = childrenOf[t.parent] || [];
+      childrenOf[t.parent].push(t);
+    }
+  }
+
+  // 3. Only sync parents that actually have subtasks
+  const campaignEntries = Object.entries(childrenOf)
+    .map(([pid, subs]) => ({ parent: byId[pid], subtasks: subs }))
+    .filter(e => e.parent) // skip if parent not in this page
+    .sort((a, b) => parseFloat(a.parent.orderindex) - parseFloat(b.parent.orderindex));
+
+  onProgress(`Found ${campaignEntries.length} campaigns — syncing…`);
+
+  let synced = 0;
+  for (const { parent, subtasks } of campaignEntries) {
+    // Upsert campaign: check by clickup_id first
+    const { data: existing } = await _sb.from('campaigns')
+      .select('id').eq('clickup_id', parent.id).maybeSingle();
+
+    let campaign;
+    const campFields = {
+      name: parent.name,
+      status: mapCampaignStatus(parent.status?.status),
+      owner: (parent.assignees || []).map(a => a.username).join(', ') || null,
+      clickup_id: parent.id,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (existing) {
+      const { data, error } = await _sb.from('campaigns').update(campFields).eq('id', existing.id).select().single();
+      if (error) throw error;
+      campaign = data;
+    } else {
+      const { data, error } = await _sb.from('campaigns').insert(campFields).select().single();
+      if (error) throw error;
+      campaign = data;
+    }
+
+    // Replace stages: delete existing, insert from ClickUp subtasks
+    await _sb.from('stages').delete().eq('campaign_id', campaign.id);
+
+    const stageRows = subtasks
+      .filter(s => s.status?.status !== 'cancelled')
+      .sort((a, b) => parseFloat(a.orderindex) - parseFloat(b.orderindex))
+      .map((s, i) => {
+        const done = s.date_done || (s.status?.status === 'complete' ? s.due_date : null);
+        return {
+          campaign_id: campaign.id,
+          name: s.name,
+          status: mapStageStatus(s.status?.status),
+          order_index: i,
+          started_at: msToIso(s.start_date) || msToIso(s.date_created),
+          ended_at: msToIso(done),
+          notes: s.assignees?.map(a => a.username).join(', ') || null,
+          clickup_id: s.id,
+        };
+      });
+
+    if (stageRows.length) {
+      const { error } = await _sb.from('stages').insert(stageRows);
+      if (error) throw error;
+    }
+
+    synced++;
+    onProgress(`${synced}/${campaignEntries.length} · ${parent.name}`);
+  }
+
+  return synced;
+}
+
 // ─── Icon helpers (inline SVG, stroke 1.6 round) ────────────
 const Icon = ({ d, size = 16, style = {} }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -137,6 +254,7 @@ const ICONS = {
   stamp:     'M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z',
   check:     'M5 13l4 4L19 7',
   alert:     'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+  sync:      'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
 };
 
 // ─── Reusable: EditableCell ───────────────────────────────────
@@ -275,12 +393,32 @@ function SetupScreen({ onReady }) {
 }
 
 // ─── Tweaks Panel ─────────────────────────────────────────────
-function TweaksPanel({ onClose }) {
+function TweaksPanel({ onClose, onSyncDone }) {
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || 'dark');
   const [density, setDensity] = useState(document.documentElement.dataset.density || 'regular');
+  const [cuKey, setCuKey] = useState(getCuKey());
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
 
   const setT = (t) => { document.documentElement.dataset.theme = t; setTheme(t); localStorage.setItem('vsm-theme', t); };
   const setD = (d) => { document.documentElement.dataset.density = d; setDensity(d); localStorage.setItem('vsm-density', d); };
+
+  const saveKey = () => { saveCuKey(cuKey.trim()); setSyncMsg('API key saved.'); };
+
+  const runSync = async () => {
+    const key = cuKey.trim() || getCuKey();
+    if (!key) { setSyncMsg('Enter your ClickUp API key first.'); return; }
+    saveCuKey(key);
+    setSyncing(true); setSyncMsg('');
+    try {
+      const n = await syncClickUp(key, setSyncMsg);
+      setSyncMsg(`Done — ${n} campaign${n !== 1 ? 's' : ''} synced.`);
+      if (onSyncDone) onSyncDone();
+    } catch(e) {
+      setSyncMsg('Error: ' + (e.message || 'Unknown error'));
+    }
+    setSyncing(false);
+  };
 
   const disconnect = () => {
     localStorage.removeItem('vsm-cfg');
@@ -310,6 +448,27 @@ function TweaksPanel({ onClose }) {
             <button className={density === 'regular' ? 'on' : ''} onClick={() => setD('regular')}>Regular</button>
             <button className={density === 'comfy' ? 'on' : ''} onClick={() => setD('comfy')}>Comfy</button>
           </div>
+        </div>
+        <div style={{ borderTop:'1px solid var(--line)', paddingTop:10 }}>
+          <div style={{ fontSize:10.5, fontWeight:600, letterSpacing:'0.07em', textTransform:'uppercase', color:'var(--text-muted)', marginBottom:6 }}>ClickUp Sync</div>
+          <input
+            type="password"
+            placeholder="pk_xxxxxxxx_…"
+            value={cuKey}
+            onChange={e => setCuKey(e.target.value)}
+            onBlur={saveKey}
+            style={{ width:'100%', border:'1px solid var(--line)', borderRadius:'var(--r-2)', padding:'6px 8px', background:'var(--bg)', color:'var(--text)', font:'inherit', fontSize:11.5, outline:'none', marginBottom:6 }}
+          />
+          <button className="btn primary" style={{ width:'100%', justifyContent:'center', fontSize:12 }}
+            onClick={runSync} disabled={syncing}>
+            <Icon d={ICONS.sync} size={12} />
+            {syncing ? 'Syncing…' : 'Sync from ClickUp'}
+          </button>
+          {syncMsg && (
+            <div style={{ fontSize:11, color: syncMsg.startsWith('Error') ? 'var(--bad)' : 'var(--text-soft)', marginTop:6, lineHeight:1.4 }}>
+              {syncMsg}
+            </div>
+          )}
         </div>
         <div style={{ borderTop:'1px solid var(--line)', paddingTop:10 }}>
           <button className="btn ghost" style={{ width:'100%', justifyContent:'center', color:'var(--bad)', fontSize:12 }} onClick={disconnect}>
@@ -1208,6 +1367,7 @@ function App() {
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [showTweaks, setShowTweaks] = useState(false);
   const [counts, setCounts] = useState({ campaigns: 0, templates: 0 });
+  const [syncTick, setSyncTick] = useState(0); // bump to force CampaignsPage reload
 
   // Restore theme/density from localStorage
   useEffect(() => {
@@ -1215,6 +1375,12 @@ function App() {
     const density = localStorage.getItem('vsm-density');
     if (theme) document.documentElement.dataset.theme = theme;
     if (density) document.documentElement.dataset.density = density;
+  }, []);
+
+  // Pre-fill ClickUp key if already saved
+  useEffect(() => {
+    const key = getCuKey();
+    if (key) saveCuKey(key); // no-op but confirms it's loaded
   }, []);
 
   if (!ready) return <SetupScreen onReady={() => setReady(true)} />;
@@ -1231,7 +1397,7 @@ function App() {
             onCampaignUpdate={(updated) => setSelectedCampaign(updated)}
           />
         ) : page === 'campaigns' ? (
-          <CampaignsPage onSelectCampaign={setSelectedCampaign} />
+          <CampaignsPage key={syncTick} onSelectCampaign={setSelectedCampaign} />
         ) : (
           <TemplatesPage onCountChange={n => setCounts(c => ({ ...c, templates: n }))} />
         )}
@@ -1242,7 +1408,12 @@ function App() {
           <Icon d={ICONS.tweaks} size={15} />
         </button>
 
-        {showTweaks && <TweaksPanel onClose={() => setShowTweaks(false)} />}
+        {showTweaks && (
+          <TweaksPanel
+            onClose={() => setShowTweaks(false)}
+            onSyncDone={() => { setSyncTick(t => t + 1); setShowTweaks(false); }}
+          />
+        )}
       </main>
     </div>
   );

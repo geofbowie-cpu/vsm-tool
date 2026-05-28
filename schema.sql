@@ -39,15 +39,19 @@ CREATE TABLE IF NOT EXISTS phase_templates (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- ── ClickUp sync columns (added for ClickUp integration) ─────
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS clickup_id text;
+ALTER TABLE stages    ADD COLUMN IF NOT EXISTS clickup_id text;
+
 -- ── RLS (permissive for internal tool — tighten if going multi-tenant) ──
 ALTER TABLE campaigns      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stages         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE phase_templates ENABLE ROW LEVEL SECURITY;
 
 -- Allow all operations via the anon key (internal tool, no auth required)
-CREATE POLICY IF NOT EXISTS "open_campaigns"       ON campaigns       FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "open_stages"          ON stages          FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "open_phase_templates" ON phase_templates FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open_campaigns"       ON campaigns       FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open_stages"          ON stages          FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open_phase_templates" ON phase_templates FOR ALL USING (true) WITH CHECK (true);
 
 -- ── Sample data (optional — delete if you want a clean slate) ──
 -- INSERT INTO campaigns (name, owner, description, status) VALUES
