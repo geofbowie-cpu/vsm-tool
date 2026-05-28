@@ -165,10 +165,10 @@ async function syncClickUp(key, onProgress) {
     }
   }
 
-  // 3. Only sync parents that actually have subtasks
+  // 3. Only sync parents that have ≥3 subtasks (real campaigns, not tasks with a couple sub-items)
   const campaignEntries = Object.entries(childrenOf)
     .map(([pid, subs]) => ({ parent: byId[pid], subtasks: subs }))
-    .filter(e => e.parent) // skip if parent not in this page
+    .filter(e => e.parent && e.subtasks.length >= 3)
     .sort((a, b) => parseFloat(a.parent.orderindex) - parseFloat(b.parent.orderindex));
 
   onProgress(`Found ${campaignEntries.length} campaigns — syncing…`);
@@ -205,14 +205,18 @@ async function syncClickUp(key, onProgress) {
       .filter(s => s.status?.status !== 'cancelled')
       .sort((a, b) => parseFloat(a.orderindex) - parseFloat(b.orderindex))
       .map((s, i) => {
-        const done = s.date_done || (s.status?.status === 'complete' ? s.due_date : null);
+        // started_at: prefer explicit start_date, fall back to date_created (always set)
+        // ended_at: prefer date_done, fall back to date_closed, then due_date for complete tasks
+        const started = msToIso(s.start_date) || msToIso(s.date_created);
+        const ended   = msToIso(s.date_done) || msToIso(s.date_closed) ||
+                        (s.status?.status === 'complete' ? msToIso(s.due_date) : null);
         return {
           campaign_id: campaign.id,
           name: s.name,
           status: mapStageStatus(s.status?.status),
           order_index: i,
-          started_at: msToIso(s.start_date) || msToIso(s.date_created),
-          ended_at: msToIso(done),
+          started_at: started,
+          ended_at: ended,
           notes: s.assignees?.map(a => a.username).join(', ') || null,
           clickup_id: s.id,
         };
@@ -666,6 +670,7 @@ function TimelineViz({ stages }) {
   const sorted = [...stages].sort((a, b) => a.order_index - b.order_index);
   const withDur = sorted.map(s => ({ ...s, dur: stageDuration(s) }));
   const totalDur = withDur.reduce((sum, s) => sum + s.dur, 0);
+  const hasTime = totalDur > 0;
 
   if (!sorted.length) return (
     <div className="vsm-timeline-wrap">
@@ -676,18 +681,27 @@ function TimelineViz({ stages }) {
     </div>
   );
 
-  const waitStages = withDur.filter(s => s.status === 'wait' && s.dur > 0);
+  // When no timing data: equal-width blocks — still shows work-vs-wait flow
+  const effectiveTotal = hasTime ? totalDur : withDur.length;
+  const effectiveDur   = (s) => hasTime ? s.dur : 1;
+
+  const waitStages = withDur.filter(s => s.status === 'wait' && effectiveDur(s) > 0);
   const bottleneck = waitStages.length > 0
-    ? waitStages.reduce((a, b) => a.dur > b.dur ? a : b)
+    ? waitStages.reduce((a, b) => effectiveDur(a) > effectiveDur(b) ? a : b)
     : null;
 
   const stats = campaignStats(stages);
 
   return (
     <div className="vsm-timeline-wrap">
+      {!hasTime && (
+        <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:8, fontStyle:'italic' }}>
+          No timestamp data — showing stage sequence only. Add timestamps to see proportional timing.
+        </div>
+      )}
       <div className="vsm-timeline">
         {withDur.map(stage => {
-          const pct = totalDur > 0 ? (stage.dur / totalDur) * 100 : (100 / withDur.length);
+          const pct = (effectiveDur(stage) / effectiveTotal) * 100;
           const isBottleneck = bottleneck && stage.id === bottleneck.id;
           const isInProgress = stage.started_at && !stage.ended_at && !stage.touch_time_min;
           const blockCls = isInProgress ? 'in-progress' : stage.status;
@@ -697,12 +711,12 @@ function TimelineViz({ stages }) {
               key={stage.id}
               className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
               style={{ width: `${Math.max(pct, 3)}%` }}
-              title={`${stage.name}\n${fmtDur(stage.dur)}${isBottleneck ? '\n⚠ Largest wait block' : ''}`}
+              title={`${stage.name}${hasTime ? '\n' + fmtDur(stage.dur) : ''}${isBottleneck ? '\n⚠ Largest wait block' : ''}`}
             >
               {isInProgress && <div className="vsm-pulse" />}
               {isBottleneck && <div className="vsm-bottleneck-tag">Bottleneck</div>}
               <div className="vsm-block-name">{stage.name}</div>
-              {stage.dur > 0 && <div className="vsm-block-dur">{fmtDur(stage.dur)}</div>}
+              {hasTime && stage.dur > 0 && <div className="vsm-block-dur">{fmtDur(stage.dur)}</div>}
             </div>
           );
         })}
@@ -715,22 +729,31 @@ function TimelineViz({ stages }) {
       </div>
 
       <div className="vsm-stat-bar">
-        <div className="vsm-stat">
-          <div className="vsm-stat-label">Total Time</div>
-          <div className="vsm-stat-value">{fmtDur(stats.total)}</div>
-        </div>
-        <div className="vsm-stat">
-          <div className="vsm-stat-label">Value-Add</div>
-          <div className="vsm-stat-value" style={{ color:'var(--good)' }}>{fmtDur(stats.value)}</div>
-        </div>
-        <div className="vsm-stat">
-          <div className="vsm-stat-label">Wait Time</div>
-          <div className="vsm-stat-value" style={{ color: stats.wait > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(stats.wait)}</div>
-        </div>
-        <div className="vsm-stat">
-          <div className="vsm-stat-label">Efficiency</div>
-          <div className="vsm-stat-value" style={{ color:`var(--${effClass(stats.efficiency)})` }}>{stats.efficiency}%</div>
-        </div>
+        {hasTime ? (
+          <>
+            <div className="vsm-stat">
+              <div className="vsm-stat-label">Total Time</div>
+              <div className="vsm-stat-value">{fmtDur(stats.total)}</div>
+            </div>
+            <div className="vsm-stat">
+              <div className="vsm-stat-label">Value-Add</div>
+              <div className="vsm-stat-value" style={{ color:'var(--good)' }}>{fmtDur(stats.value)}</div>
+            </div>
+            <div className="vsm-stat">
+              <div className="vsm-stat-label">Wait Time</div>
+              <div className="vsm-stat-value" style={{ color: stats.wait > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(stats.wait)}</div>
+            </div>
+            <div className="vsm-stat">
+              <div className="vsm-stat-label">Efficiency</div>
+              <div className="vsm-stat-value" style={{ color:`var(--${effClass(stats.efficiency)})` }}>{stats.efficiency}%</div>
+            </div>
+          </>
+        ) : (
+          <div className="vsm-stat" style={{ flex:'none' }}>
+            <div className="vsm-stat-label">Stages</div>
+            <div className="vsm-stat-value">{sorted.length} total · {sorted.filter(s=>s.status==='wait').length} wait · {sorted.filter(s=>s.status==='active').length} work</div>
+          </div>
+        )}
         {bottleneck && (
           <div className="vsm-stat">
             <div className="vsm-stat-label">Bottleneck</div>
