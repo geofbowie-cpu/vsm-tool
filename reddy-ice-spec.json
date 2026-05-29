@@ -1,0 +1,58 @@
+{
+  "title": "Reddy Ice ABM Campaign",
+  "subtitle": "Current State · ClickUp data · May 2026",
+  "unit": "days",
+  "supplier": "Campaign Brief",
+  "customer": "Reddy Ice Audience",
+  "phases": [
+    {
+      "name": "Brief & Strategy",
+      "processTime": 3,
+      "leadTime": 9,
+      "waitAfter": 0,
+      "owner": "Andrea Gorder",
+      "pctCompleteAccurate": 85,
+      "kaizen": "Standardize brief template to cut lead time to 3d"
+    },
+    {
+      "name": "Creative",
+      "processTime": 12,
+      "leadTime": 23,
+      "waitAfter": 0,
+      "owner": "Grace Baker / Lexi Del Rosso",
+      "pctCompleteAccurate": 70,
+      "kaizen": "Multiple revision loops — define approval criteria upfront"
+    },
+    {
+      "name": "Digital / Web",
+      "processTime": 10,
+      "leadTime": 46,
+      "waitAfter": 0,
+      "owner": "Andrea Gorder",
+      "kaizen": "Started before brief — needs intake trigger to sequence correctly"
+    },
+    {
+      "name": "Collateral",
+      "processTime": 5,
+      "leadTime": 32,
+      "waitAfter": 0,
+      "owner": "Andrea Gorder"
+    },
+    {
+      "name": "Ad Build",
+      "processTime": 3,
+      "leadTime": 11,
+      "waitAfter": 11,
+      "owner": "Andrea Gorder"
+    },
+    {
+      "name": "Review / Approval",
+      "processTime": 1,
+      "leadTime": 1,
+      "waitAfter": 0,
+      "owner": "Andrea Gorder / Lexi Del Rosso",
+      "valueAdded": false,
+      "kaizen": "No review SLA defined — currently 11+ days blocked"
+    }
+  ]
+}
