@@ -113,6 +113,20 @@ const db = {
   },
 };
 
+// ─── Ideal campaign targets ───────────────────────────────────
+// Best-practice target durations per stage (in days).
+// These define what "good" looks like for future campaigns.
+const IDEAL_MAP = {
+  'Reddy Ice ABM': [
+    { name: 'Brief & Strategy', days: 2,  status: 'active' },
+    { name: 'Creative',         days: 5,  status: 'active' },
+    { name: 'Digital / Web',    days: 3,  status: 'active' },
+    { name: 'Collateral',       days: 2,  status: 'active' },
+    { name: 'Ad Build',         days: 3,  status: 'active' },
+    { name: 'Review',           days: 1,  status: 'wait'   },
+  ],
+};
+
 // ─── ClickUp sync ────────────────────────────────────────────
 const CU_LIST_ID = '901113342672'; // Marketing Team › Campaigns › Campaign Tasks
 
@@ -679,12 +693,91 @@ function CampaignTable({ campaigns, stagesMap, onSelect, onDelete }) {
   );
 }
 
-// ─── Timeline Visualization ───────────────────────────────────
-function TimelineViz({ stages }) {
-  const sorted = [...stages].sort((a, b) => a.order_index - b.order_index);
+// ─── Build timeline segments (stages + inter-stage gaps) ──────
+function buildSegments(sortedStages, hasTime) {
+  if (!hasTime) return sortedStages.map(s => ({ type:'stage', stage:s, dur: 1 }));
+  const segs = [];
+  for (let i = 0; i < sortedStages.length; i++) {
+    const s = sortedStages[i];
+    const dur = stageDuration(s);
+    segs.push({ type:'stage', stage:s, dur });
+    // Gap = time between this stage ending and next stage starting
+    if (i < sortedStages.length - 1 && s.ended_at && sortedStages[i+1].started_at) {
+      const gapMin = Math.round(
+        (new Date(sortedStages[i+1].started_at) - new Date(s.ended_at)) / 60000
+      );
+      if (gapMin > 120) { // only show gaps > 2 hours
+        segs.push({ type:'gap', dur: gapMin });
+      }
+    }
+  }
+  return segs;
+}
+
+// ─── Shared timeline row renderer ─────────────────────────────
+function ActualTrack({ segments, effectiveTotal, hasTime, bottleneck, height = 72 }) {
+  return (
+    <div style={{ display:'flex', gap:3, height, alignItems:'stretch' }}>
+      {segments.map((seg, i) => {
+        const pct = (seg.dur / effectiveTotal) * 100;
+        if (seg.type === 'gap') {
+          return (
+            <div key={`gap-${i}`} className="vsm-gap"
+              style={{ width:`${Math.max(pct, 2)}%` }}
+              title={`Dead time: ${fmtDur(seg.dur)}`}>
+              <div className="vsm-gap-label">Gap</div>
+              <div className="vsm-gap-dur">{fmtDur(seg.dur)}</div>
+            </div>
+          );
+        }
+        const { stage } = seg;
+        const isBottleneck = bottleneck && stage.id === bottleneck.id;
+        const isInProgress = stage.started_at && !stage.ended_at && !stage.touch_time_min;
+        const blockCls = isBottleneck ? 'wait' : isInProgress ? 'in-progress' : stage.status;
+        return (
+          <div key={stage.id}
+            className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
+            style={{ width:`${Math.max(pct, 3)}%` }}
+            title={`${stage.name}${hasTime ? '\n' + fmtDur(seg.dur) : ''}${isBottleneck ? '\n⚠ Bottleneck' : ''}`}
+          >
+            {isInProgress && <div className="vsm-pulse" />}
+            {isBottleneck && <div className="vsm-bottleneck-tag">Bottleneck</div>}
+            <div className="vsm-block-name">{stage.name}</div>
+            {hasTime && seg.dur > 0 && <div className="vsm-block-dur">{fmtDur(seg.dur)}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function IdealTrack({ ideal, height = 40 }) {
+  if (!ideal?.length) return null;
+  const totalMin = ideal.reduce((s, st) => s + st.days * 24 * 60, 0);
+  return (
+    <div style={{ display:'flex', gap:3, height, alignItems:'stretch' }}>
+      {ideal.map((st, i) => {
+        const pct = (st.days * 24 * 60 / totalMin) * 100;
+        return (
+          <div key={i} className={`vsm-ideal-block ${st.status}`}
+            style={{ width:`${Math.max(pct, 3)}%` }}
+            title={`Target: ${st.name} — ${st.days}d`}>
+            <div className="vsm-ideal-name">{st.name}</div>
+            <div className="vsm-ideal-dur">{st.days}d</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Timeline Visualization (detail view) ─────────────────────
+function TimelineViz({ stages, campaignName }) {
+  const ideal   = IDEAL_MAP[campaignName] || [];
+  const sorted  = [...stages].sort((a, b) => a.order_index - b.order_index);
   const withDur = sorted.map(s => ({ ...s, dur: stageDuration(s) }));
   const totalDur = withDur.reduce((sum, s) => sum + s.dur, 0);
-  const hasTime = totalDur > 0;
+  const hasTime  = totalDur > 0;
 
   if (!sorted.length) return (
     <div className="vsm-timeline-wrap">
@@ -695,66 +788,69 @@ function TimelineViz({ stages }) {
     </div>
   );
 
-  // When no timing data: equal-width blocks — still shows work-vs-wait flow
-  const effectiveTotal = hasTime ? totalDur : withDur.length;
-  const effectiveDur   = (s) => hasTime ? s.dur : 1;
+  const segments = buildSegments(sorted, hasTime);
+  const effectiveTotal = segments.reduce((s, seg) => s + seg.dur, 0) || sorted.length;
 
-  const waitStages = withDur.filter(s => s.status === 'wait' && effectiveDur(s) > 0);
+  const waitStages = withDur.filter(s => s.status === 'wait');
   const bottleneck = waitStages.length > 0
-    ? waitStages.reduce((a, b) => effectiveDur(a) > effectiveDur(b) ? a : b)
+    ? waitStages.reduce((a, b) => stageDuration(a) > stageDuration(b) ? a : b)
     : null;
 
   const stats = campaignStats(stages);
+  const idealTotalDays = ideal.reduce((s, st) => s + st.days, 0);
+  const actualTotalDays = Math.round(totalDur / 60 / 24);
+  const gapCount = segments.filter(s => s.type === 'gap').length;
+  const gapTotal = segments.filter(s => s.type === 'gap').reduce((s, g) => s + g.dur, 0);
 
   return (
     <div className="vsm-timeline-wrap">
-      {!hasTime && (
-        <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:8, fontStyle:'italic' }}>
-          No timestamp data — showing stage sequence only. Add timestamps to see proportional timing.
+      {/* Actual */}
+      <div className="vsm-track-label">Actual</div>
+      <ActualTrack segments={segments} effectiveTotal={effectiveTotal} hasTime={hasTime} bottleneck={bottleneck} height={72} />
+
+      {/* Ideal */}
+      {ideal.length > 0 && (
+        <div style={{ marginTop:10 }}>
+          <div className="vsm-track-label" style={{ color:'var(--good)' }}>
+            Target — best practice ({idealTotalDays}d total)
+          </div>
+          <IdealTrack ideal={ideal} height={36} />
         </div>
       )}
-      <div className="vsm-timeline">
-        {withDur.map(stage => {
-          const pct = (effectiveDur(stage) / effectiveTotal) * 100;
-          const isBottleneck = bottleneck && stage.id === bottleneck.id;
-          const isInProgress = stage.started_at && !stage.ended_at && !stage.touch_time_min;
-          const blockCls = isBottleneck ? 'wait' : isInProgress ? 'in-progress' : stage.status;
 
-          return (
-            <div
-              key={stage.id}
-              className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
-              style={{ width: `${Math.max(pct, 3)}%` }}
-              title={`${stage.name}${hasTime ? '\n' + fmtDur(stage.dur) : ''}${isBottleneck ? '\n⚠ Largest wait block' : ''}`}
-            >
-              {isInProgress && <div className="vsm-pulse" />}
-              {isBottleneck && <div className="vsm-bottleneck-tag">Bottleneck</div>}
-              <div className="vsm-block-name">{stage.name}</div>
-              {hasTime && stage.dur > 0 && <div className="vsm-block-dur">{fmtDur(stage.dur)}</div>}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="vsm-legend">
-        <div className="vsm-legend-item"><span className="vsm-legend-dot active" />Value-add work</div>
+      {/* Legend */}
+      <div className="vsm-legend" style={{ marginTop:10 }}>
+        <div className="vsm-legend-item"><span className="vsm-legend-dot active" />Work</div>
         <div className="vsm-legend-item"><span className="vsm-legend-dot wait" />Wait / blocked</div>
         <div className="vsm-legend-item"><span className="vsm-legend-dot in-progress" />In progress</div>
+        {gapCount > 0 && (
+          <div className="vsm-legend-item">
+            <span style={{ display:'inline-block', width:10, height:10, borderRadius:2, border:'1px dashed var(--bad)', background:'var(--bad-bg)', marginRight:5 }} />
+            Gap ({gapCount} · {fmtDur(gapTotal)} total dead time)
+          </div>
+        )}
       </div>
 
+      {/* Stats */}
       <div className="vsm-stat-bar">
         {hasTime ? (
           <>
             <div className="vsm-stat">
-              <div className="vsm-stat-label">Total Time</div>
+              <div className="vsm-stat-label">Total (actual)</div>
               <div className="vsm-stat-value">{fmtDur(stats.total)}</div>
             </div>
+            {ideal.length > 0 && (
+              <div className="vsm-stat">
+                <div className="vsm-stat-label">Total (target)</div>
+                <div className="vsm-stat-value" style={{ color:'var(--good)' }}>{idealTotalDays}d</div>
+              </div>
+            )}
             <div className="vsm-stat">
-              <div className="vsm-stat-label">Value-Add</div>
-              <div className="vsm-stat-value" style={{ color:'var(--good)' }}>{fmtDur(stats.value)}</div>
+              <div className="vsm-stat-label">Dead time (gaps)</div>
+              <div className="vsm-stat-value" style={{ color: gapTotal > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(gapTotal) || '—'}</div>
             </div>
             <div className="vsm-stat">
-              <div className="vsm-stat-label">Wait Time</div>
+              <div className="vsm-stat-label">Wait stages</div>
               <div className="vsm-stat-value" style={{ color: stats.wait > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(stats.wait)}</div>
             </div>
             <div className="vsm-stat">
@@ -765,7 +861,7 @@ function TimelineViz({ stages }) {
         ) : (
           <div className="vsm-stat" style={{ flex:'none' }}>
             <div className="vsm-stat-label">Stages</div>
-            <div className="vsm-stat-value">{sorted.length} total · {sorted.filter(s=>s.status==='wait').length} wait · {sorted.filter(s=>s.status==='active').length} work</div>
+            <div className="vsm-stat-value">{sorted.length} total · {sorted.filter(s=>s.status==='wait').length} wait</div>
           </div>
         )}
         {bottleneck && (
@@ -1063,7 +1159,7 @@ function CampaignDetail({ campaign, onBack, onCampaignUpdate }) {
         {loading ? (
           <div style={{ padding:32, textAlign:'center', color:'var(--text-muted)' }}>Loading…</div>
         ) : (
-          <TimelineViz stages={stages} />
+          <TimelineViz stages={stages} campaignName={campaign.name} />
         )}
       </div>
 
@@ -1172,41 +1268,40 @@ function NewCampaignDrawer({ onClose, onCreate, templates }) {
 
 // ─── Campaign Map Card ────────────────────────────────────────
 function CampaignMapCard({ campaign, stages, onSelect, onDelete }) {
-  const stats = campaignStats(stages);
-  const sorted = [...stages].sort((a, b) => a.order_index - b.order_index);
-  const withDur = sorted.map(s => ({ ...s, dur: stageDuration(s) }));
-  const totalDur = withDur.reduce((sum, s) => sum + s.dur, 0);
-  const hasTime = totalDur > 0;
-  const effectiveTotal = hasTime ? totalDur : withDur.length;
-  const effectiveDur = (s) => hasTime ? s.dur : 1;
+  const ideal   = IDEAL_MAP[campaign.name] || [];
+  const stats   = campaignStats(stages);
+  const sorted  = [...stages].sort((a, b) => a.order_index - b.order_index);
+  const totalDur = sorted.reduce((s, st) => s + stageDuration(st), 0);
+  const hasTime  = totalDur > 0;
 
-  const waitStages = withDur.filter(s => s.status === 'wait');
+  const segments     = buildSegments(sorted, hasTime);
+  const effectiveTotal = segments.reduce((s, seg) => s + seg.dur, 0) || sorted.length;
+  const gapTotal     = segments.filter(s => s.type === 'gap').reduce((s, g) => s + g.dur, 0);
+
+  const waitStages = sorted.filter(s => s.status === 'wait');
   const bottleneck = waitStages.length > 0
-    ? waitStages.reduce((a, b) => effectiveDur(a) > effectiveDur(b) ? a : b)
+    ? waitStages.reduce((a, b) => stageDuration(a) > stageDuration(b) ? a : b)
     : null;
 
   const inProgress = stages.some(s => s.started_at && !s.ended_at && !s.touch_time_min);
-  const statusCls = campaign.status === 'active' ? (inProgress ? 'warn' : 'ok') : 'muted';
+  const statusCls  = campaign.status === 'active' ? (inProgress ? 'warn' : 'ok') : 'muted';
+  const idealDays  = ideal.reduce((s, st) => s + st.days, 0);
 
   return (
-    <div className="card" style={{ marginBottom: 16, cursor:'default' }}>
-      {/* Card header */}
+    <div className="card" style={{ marginBottom:16 }}>
+      {/* Header */}
       <div className="card-hd" style={{ padding:'14px 18px' }}>
         <div style={{ display:'flex', alignItems:'center', gap:10, flex:1, minWidth:0 }}>
-          <div style={{
-            width:32, height:32, borderRadius:8, flexShrink:0,
-            background: colorOf(campaign.name),
-            display:'grid', placeItems:'center',
-            color:'white', fontWeight:700, fontSize:12,
-          }}>{initialsOf(campaign.name)}</div>
+          <div style={{ width:32, height:32, borderRadius:8, flexShrink:0, background:colorOf(campaign.name), display:'grid', placeItems:'center', color:'white', fontWeight:700, fontSize:12 }}>
+            {initialsOf(campaign.name)}
+          </div>
           <div style={{ minWidth:0 }}>
             <div style={{ fontWeight:600, fontSize:14, letterSpacing:'-0.01em', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
               {campaign.name}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
               <span className={`cs-status ${statusCls}`} style={{ fontSize:11 }}>
-                <span className="dot" />
-                {inProgress ? 'In progress' : campaign.status}
+                <span className="dot" />{inProgress ? 'In progress' : campaign.status}
               </span>
               {campaign.owner && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{campaign.owner}</span>}
               <span style={{ fontSize:11, color:'var(--text-muted)' }}>{stages.length} stages</span>
@@ -1214,25 +1309,28 @@ function CampaignMapCard({ campaign, stages, onSelect, onDelete }) {
           </div>
         </div>
         <div className="card-hd-spacer" />
-        {/* Stat pills */}
         {hasTime && (
           <div style={{ display:'flex', gap:16, alignItems:'center', marginRight:12 }}>
             <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Total</div>
+              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Actual</div>
               <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600 }}>{fmtDur(stats.total)}</div>
             </div>
-            <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Wait</div>
-              <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color: stats.wait > 0 ? 'var(--bad)' : 'var(--text-muted)' }}>{fmtDur(stats.wait)}</div>
-            </div>
-            <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--text-muted)' }}>Efficiency</div>
-              <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color:`var(--${effClass(stats.efficiency)})` }}>{stats.efficiency}%</div>
-            </div>
+            {idealDays > 0 && (
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--good)' }}>Target</div>
+                <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color:'var(--good)' }}>{idealDays}d</div>
+              </div>
+            )}
+            {gapTotal > 0 && (
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontSize:10, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--bad)' }}>Dead time</div>
+                <div style={{ fontFamily:'var(--f-mono)', fontSize:13, fontWeight:600, color:'var(--bad)' }}>{fmtDur(gapTotal)}</div>
+              </div>
+            )}
           </div>
         )}
         <button className="btn ghost" style={{ padding:'4px 8px', fontSize:12 }} onClick={() => onSelect(campaign)}>
-          Edit / Details →
+          Details →
         </button>
         <button className="btn ghost" style={{ padding:'4px', color:'var(--text-muted)' }}
           onClick={() => { if (confirm(`Delete "${campaign.name}"?`)) onDelete(campaign.id); }}>
@@ -1240,68 +1338,37 @@ function CampaignMapCard({ campaign, stages, onSelect, onDelete }) {
         </button>
       </div>
 
-      {/* The map itself */}
-      <div style={{ padding:'12px 18px 16px' }}>
+      {/* Map */}
+      <div style={{ padding:'12px 18px 14px' }}>
         {stages.length === 0 ? (
           <div style={{ textAlign:'center', padding:'20px 0', color:'var(--text-muted)', fontSize:13 }}>
-            No stages — <span className="cust-link" onClick={() => onSelect(campaign)}>add stages in detail view</span>
+            No stages — <span className="cust-link" onClick={() => onSelect(campaign)}>add in detail view</span>
           </div>
         ) : (
           <>
-            {/* Horizontal timeline */}
-            <div style={{ display:'flex', gap:3, height:56, marginBottom:8 }}>
-              {withDur.map(stage => {
-                const pct = (effectiveDur(stage) / effectiveTotal) * 100;
-                const isBottleneck = bottleneck && stage.id === bottleneck.id;
-                const isInProg = stage.started_at && !stage.ended_at && !stage.touch_time_min;
-                const blockCls = isBottleneck ? 'wait' : isInProg ? 'in-progress' : stage.status;
-                return (
-                  <div key={stage.id}
-                    className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
-                    style={{ width:`${Math.max(pct, 2)}%`, borderRadius:4 }}
-                    title={`${stage.name}${hasTime ? ' · ' + fmtDur(stage.dur) : ''}${isBottleneck ? ' ⚠ Bottleneck' : ''}`}
-                  >
-                    {isInProg && <div className="vsm-pulse" />}
-                    {isBottleneck && <div className="vsm-bottleneck-tag">Bottleneck</div>}
-                    <div className="vsm-block-name" style={{ fontSize:10 }}>{stage.name}</div>
-                    {hasTime && stage.dur > 0 && (
-                      <div className="vsm-block-dur" style={{ fontSize:9 }}>{fmtDur(stage.dur)}</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <div className="vsm-track-label">Actual</div>
+            <ActualTrack segments={segments} effectiveTotal={effectiveTotal} hasTime={hasTime} bottleneck={bottleneck} height={52} />
 
-            {/* Stage labels row */}
-            <div style={{ display:'flex', gap:3 }}>
-              {withDur.map(stage => {
-                const pct = (effectiveDur(stage) / effectiveTotal) * 100;
-                return (
-                  <div key={stage.id} style={{
-                    width:`${Math.max(pct, 2)}%`,
-                    fontSize:9, color:'var(--text-muted)',
-                    textAlign:'center', overflow:'hidden',
-                    whiteSpace:'nowrap', textOverflow:'ellipsis',
-                  }}>
-                    {stage.status === 'wait' ? '⏸' : '▶'}
-                  </div>
-                );
-              })}
-            </div>
+            {ideal.length > 0 && (
+              <div style={{ marginTop:8 }}>
+                <div className="vsm-track-label" style={{ color:'var(--good)' }}>Target — best practice ({idealDays}d)</div>
+                <IdealTrack ideal={ideal} height={30} />
+              </div>
+            )}
 
-            {/* Legend + bottleneck note */}
-            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:10, flexWrap:'wrap' }}>
               <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot active" />Work</div>
               <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot wait" />Wait</div>
               <div className="vsm-legend-item" style={{ fontSize:11 }}><span className="vsm-legend-dot in-progress" />In progress</div>
-              {bottleneck && (
-                <span style={{ marginLeft:'auto', fontSize:11, color:'var(--bad)', fontWeight:500 }}>
-                  ⚠ Bottleneck: {bottleneck.name}{hasTime ? ` (${fmtDur(effectiveDur(bottleneck))})` : ''}
-                </span>
+              {gapTotal > 0 && (
+                <div className="vsm-legend-item" style={{ fontSize:11 }}>
+                  <span style={{ display:'inline-block', width:10, height:10, borderRadius:2, border:'1px dashed var(--bad)', background:'var(--bad-bg)', marginRight:5 }} />
+                  Gap ({fmtDur(gapTotal)} dead time)
+                </div>
               )}
-              {!hasTime && (
-                <span style={{ marginLeft:'auto', fontSize:10, color:'var(--text-muted)', fontStyle:'italic' }}>
-                  Equal-width — no timestamp data
+              {bottleneck && (
+                <span style={{ marginLeft:'auto', fontSize:11, color:'var(--bad)', fontWeight:600 }}>
+                  ⚠ Bottleneck: {bottleneck.name}
                 </span>
               )}
             </div>

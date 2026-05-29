@@ -152,6 +152,84 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Gap block (dead time between stages) ─────────────────── */
+.vsm-gap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--bad-bg),
+    var(--bad-bg) 3px,
+    transparent 3px,
+    transparent 8px
+  );
+  border: 1px dashed color-mix(in oklab, var(--bad), transparent 40%);
+  flex-shrink: 0;
+}
+.vsm-gap-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--bad);
+  line-height: 1.2;
+}
+.vsm-gap-dur {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  color: var(--bad);
+  opacity: 0.8;
+}
+
+/* ── Track labels ─────────────────────────────────────────── */
+.vsm-track-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+/* ── Ideal track ──────────────────────────────────────────── */
+.vsm-ideal-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  min-width: 24px;
+  overflow: hidden;
+}
+.vsm-ideal-block.active {
+  background: color-mix(in oklab, var(--good), transparent 72%);
+  border: 1px solid color-mix(in oklab, var(--good), transparent 40%);
+}
+.vsm-ideal-block.wait {
+  background: color-mix(in oklab, var(--bad), transparent 72%);
+  border: 1px dashed color-mix(in oklab, var(--bad), transparent 30%);
+}
+.vsm-ideal-name {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-align: center;
+  padding: 0 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+.vsm-ideal-dur {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
 /* ── Efficiency bar ───────────────────────────────────────── */
 .eff-bar-wrap {
   display: inline-flex;
