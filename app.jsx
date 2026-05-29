@@ -718,7 +718,7 @@ function TimelineViz({ stages }) {
           const pct = (effectiveDur(stage) / effectiveTotal) * 100;
           const isBottleneck = bottleneck && stage.id === bottleneck.id;
           const isInProgress = stage.started_at && !stage.ended_at && !stage.touch_time_min;
-          const blockCls = isInProgress ? 'in-progress' : stage.status;
+          const blockCls = isBottleneck ? 'wait' : isInProgress ? 'in-progress' : stage.status;
 
           return (
             <div
@@ -1254,7 +1254,7 @@ function CampaignMapCard({ campaign, stages, onSelect, onDelete }) {
                 const pct = (effectiveDur(stage) / effectiveTotal) * 100;
                 const isBottleneck = bottleneck && stage.id === bottleneck.id;
                 const isInProg = stage.started_at && !stage.ended_at && !stage.touch_time_min;
-                const blockCls = isInProg ? 'in-progress' : stage.status;
+                const blockCls = isBottleneck ? 'wait' : isInProg ? 'in-progress' : stage.status;
                 return (
                   <div key={stage.id}
                     className={`vsm-block ${blockCls} ${isBottleneck ? 'bottleneck' : ''}`}
