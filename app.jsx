@@ -116,6 +116,25 @@ const db = {
 // ─── ClickUp sync ────────────────────────────────────────────
 const CU_LIST_ID = '901113342672'; // Marketing Team › Campaigns › Campaign Tasks
 
+// Campaign definitions: tag → name + stage groupings
+// Each stage lists the ClickUp task IDs that belong to it.
+// Add new campaigns here as the team tags more work in ClickUp.
+const CAMPAIGN_DEFS = [
+  {
+    tag:   'reddy-ice-campaign',
+    name:  'Reddy Ice ABM',
+    owner: 'Andrea Gorder, Lexi Del Rosso, grace baker',
+    stages: [
+      { name: 'Brief & Strategy', ids: ['868jk3yh7','868jggwdu','868jghc1p'], order: 0 },
+      { name: 'Creative',         ids: ['868jm577q','868jhkh7g','868jhkgyy','868jhkfua'], order: 1 },
+      { name: 'Digital / Web',    ids: ['868jdqb8a','868j8a6tb'], order: 2 },
+      { name: 'Collateral',       ids: ['868jdp28a'], order: 3 },
+      { name: 'Ad Build',         ids: ['868jnw2nh'], order: 4 },
+      { name: 'Review',           ids: ['868jp1j39'], order: 5 },
+    ],
+  },
+];
+
 const getCuKey = () => {
   try { return JSON.parse(localStorage.getItem('vsm-cu') || '{}').key || ''; }
   catch { return ''; }
@@ -126,70 +145,74 @@ const cuHeaders = (key) => ({ Authorization: key, 'Content-Type': 'application/j
 
 const msToIso = (ms) => ms ? new Date(parseInt(ms)).toISOString() : null;
 
-const mapCampaignStatus = (s) =>
-  s === 'complete' || s === 'closed' ? 'complete' :
-  s === 'cancelled' ? 'archived' : 'active';
+// Compute stage timing and status from a group of ClickUp tasks
+function stageFromTasks(tasks) {
+  const statuses = tasks.map(t => t.status?.status || 'to do');
+  const created  = tasks.map(t => parseInt(t.date_created)).filter(Boolean);
+  const allDone  = statuses.every(s => s === 'complete' || s === 'closed');
+  const dones    = allDone
+    ? tasks.map(t => parseInt(t.date_done) || parseInt(t.date_closed) || parseInt(t.due_date)).filter(Boolean)
+    : [];
 
-const mapStageStatus = (s) =>
-  s === 'on hold' || s === 'to do' ? 'wait' : 'active';
+  const vstatus  = statuses.some(s => s === 'in progress') ? 'active'
+                 : statuses.every(s => s === 'to do' || s === 'on hold') ? 'wait'
+                 : 'active';
 
-async function fetchCuPage(key, page) {
-  const res = await fetch(
-    `https://api.clickup.com/api/v2/list/${CU_LIST_ID}/task?subtasks=true&include_closed=true&page=${page}`,
-    { headers: cuHeaders(key) }
-  );
-  if (!res.ok) throw new Error(`ClickUp API ${res.status}: ${await res.text()}`);
-  return res.json();
+  return {
+    status:     vstatus,
+    started_at: created.length ? new Date(Math.min(...created)).toISOString() : null,
+    ended_at:   dones.length   ? new Date(Math.max(...dones)).toISOString()   : null,
+  };
 }
 
 async function syncClickUp(key, onProgress) {
-  // 1. Fetch all tasks (paginate)
   onProgress('Fetching tasks from ClickUp…');
+
+  // Fetch all tasks in the list (we need them to look up by ID)
   const allTasks = [];
   let page = 0;
   while (true) {
-    const data = await fetchCuPage(key, page);
+    const res = await fetch(
+      `https://api.clickup.com/api/v2/list/${CU_LIST_ID}/task?subtasks=true&include_closed=true&page=${page}`,
+      { headers: cuHeaders(key) }
+    );
+    if (!res.ok) throw new Error(`ClickUp API ${res.status}`);
+    const data = await res.json();
     if (!data.tasks?.length) break;
     allTasks.push(...data.tasks);
-    if (data.last_page !== false || data.tasks.length < 100) break;
+    if (data.tasks.length < 100) break;
     page++;
   }
-
-  // 2. Build parent→children map
   const byId = Object.fromEntries(allTasks.map(t => [t.id, t]));
-  const childrenOf = {};
-  for (const t of allTasks) {
-    if (t.parent) {
-      childrenOf[t.parent] = childrenOf[t.parent] || [];
-      childrenOf[t.parent].push(t);
-    }
+
+  // Wipe campaigns that were auto-synced (clickup_id is a task ID, not a tag)
+  // Keep any manually created campaigns (no clickup_id)
+  const { data: existing } = await _sb.from('campaigns').select('id, clickup_id');
+  const toDelete = (existing || []).filter(c => c.clickup_id && !c.clickup_id.includes('-campaign'));
+  for (const c of toDelete) {
+    await _sb.from('campaigns').delete().eq('id', c.id);
   }
 
-  // 3. Only sync parents that have ≥3 subtasks (real campaigns, not tasks with a couple sub-items)
-  const campaignEntries = Object.entries(childrenOf)
-    .map(([pid, subs]) => ({ parent: byId[pid], subtasks: subs }))
-    .filter(e => e.parent && e.subtasks.length >= 3)
-    .sort((a, b) => parseFloat(a.parent.orderindex) - parseFloat(b.parent.orderindex));
-
-  onProgress(`Found ${campaignEntries.length} campaigns — syncing…`);
-
   let synced = 0;
-  for (const { parent, subtasks } of campaignEntries) {
-    // Upsert campaign: check by clickup_id first
-    const { data: existing } = await _sb.from('campaigns')
-      .select('id').eq('clickup_id', parent.id).maybeSingle();
+  for (const def of CAMPAIGN_DEFS) {
+    onProgress(`Building "${def.name}"…`);
 
-    let campaign;
+    // Upsert the campaign itself
+    const { data: existingCamp } = await _sb.from('campaigns')
+      .select('id').eq('clickup_id', def.tag).maybeSingle();
+
+    const campStatus = def.stages.some(s =>
+      s.ids.some(id => byId[id]?.status?.status === 'in progress')
+    ) ? 'active' : 'active';
+
     const campFields = {
-      name: parent.name,
-      status: mapCampaignStatus(parent.status?.status),
-      owner: (parent.assignees || []).map(a => a.username).join(', ') || null,
-      clickup_id: parent.id,
-      updated_at: new Date().toISOString(),
+      name: def.name, status: campStatus, owner: def.owner,
+      clickup_id: def.tag, updated_at: new Date().toISOString(),
     };
 
-    if (existing) {
-      const { data, error } = await _sb.from('campaigns').update(campFields).eq('id', existing.id).select().single();
+    let campaign;
+    if (existingCamp) {
+      const { data, error } = await _sb.from('campaigns').update(campFields).eq('id', existingCamp.id).select().single();
       if (error) throw error;
       campaign = data;
     } else {
@@ -198,37 +221,28 @@ async function syncClickUp(key, onProgress) {
       campaign = data;
     }
 
-    // Replace stages: delete existing, insert from ClickUp subtasks
+    // Rebuild stages
     await _sb.from('stages').delete().eq('campaign_id', campaign.id);
 
-    const stageRows = subtasks
-      .filter(s => s.status?.status !== 'cancelled')
-      .sort((a, b) => parseFloat(a.orderindex) - parseFloat(b.orderindex))
-      .map((s, i) => {
-        // started_at: prefer explicit start_date, fall back to date_created (always set)
-        // ended_at: prefer date_done, fall back to date_closed, then due_date for complete tasks
-        const started = msToIso(s.start_date) || msToIso(s.date_created);
-        const ended   = msToIso(s.date_done) || msToIso(s.date_closed) ||
-                        (s.status?.status === 'complete' ? msToIso(s.due_date) : null);
-        return {
-          campaign_id: campaign.id,
-          name: s.name,
-          status: mapStageStatus(s.status?.status),
-          order_index: i,
-          started_at: started,
-          ended_at: ended,
-          notes: s.assignees?.map(a => a.username).join(', ') || null,
-          clickup_id: s.id,
-        };
-      });
+    const stageRows = def.stages.map(stage => {
+      const tasks = stage.ids.map(id => byId[id]).filter(Boolean);
+      const { status, started_at, ended_at } = stageFromTasks(tasks);
+      return {
+        campaign_id: campaign.id,
+        name:        stage.name,
+        status,
+        order_index: stage.order,
+        started_at,
+        ended_at,
+        clickup_id:  `${def.tag}:${stage.name}`,
+        notes:       tasks.map(t => t.name).join(' · '),
+      };
+    });
 
-    if (stageRows.length) {
-      const { error } = await _sb.from('stages').insert(stageRows);
-      if (error) throw error;
-    }
-
+    const { error } = await _sb.from('stages').insert(stageRows);
+    if (error) throw error;
     synced++;
-    onProgress(`${synced}/${campaignEntries.length} · ${parent.name}`);
+    onProgress(`Done — ${def.name} synced`);
   }
 
   return synced;
